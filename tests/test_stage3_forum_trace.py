@@ -22,6 +22,14 @@ THINKING_CSS = (PROJECT_ROOT / "static" / "css" / "thinking.css").read_text(enco
 
 @pytest.fixture
 def stage3_trace_context(tmp_path, monkeypatch):
+    # Keep this diagnostic suite independent of any running Redis/main sessions.
+    import redis
+
+    def unavailable_redis(*args, **kwargs):
+        raise redis.ConnectionError("isolated trace test uses filesystem sessions")
+
+    monkeypatch.setattr(redis.Redis, "ping", unavailable_redis)
+    monkeypatch.setenv("SESSION_FILE_DIR", str(tmp_path / "sessions"))
     database_path = tmp_path / "stage3_forum_trace.db"
     monkeypatch.setattr(_TestingConfig, "SQLALCHEMY_DATABASE_URI", f"sqlite:///{database_path}")
     app = create_app("testing")
@@ -283,3 +291,70 @@ def test_stage3_trace_debug_panel_contract_is_collapsible_and_uses_safe_text_ren
     assert "codesense-dev-debug-panel-collapsed" in THINKING_JS
     assert ".dev-debug-panel.is-collapsed .dev-debug-content" in THINKING_CSS
     assert ".dev-debug-trace-list" in THINKING_CSS
+
+
+@pytest.mark.parametrize(
+    "login_host,request_host",
+    [("localhost", "localhost"), ("example.com", "example.com"),
+     ("example.com", "localhost"), ("localhost", "example.com")],
+)
+def test_trace_cookie_scope_root_cause(stage3_trace_context, monkeypatch,
+                                     login_host, request_host):
+    """Observe cookie delivery and route entry, not just the final status."""
+    from flask import request, request_started, session
+    from urllib.parse import urlsplit
+    import routes.thinking as thinking_routes
+
+    app, _, session_id = stage3_trace_context
+    client = app.test_client()  # No localhost cookie inherited from the fixture.
+    observations = []
+    route_entries = []
+    original_local_check = thinking_routes._request_is_local
+
+    def observe_auth_boundary(sender, **extra):
+        if request.path == "/thinking/api/stage3/forum/trace":
+            observations.append({
+                "cookie_present": app.config["SESSION_COOKIE_NAME"] in request.cookies,
+                "user_present": "_user_id" in session,
+            })
+
+    request_started.connect(observe_auth_boundary, sender=app)
+
+    def observe_route_entry():
+        route_entries.append(True)
+        return original_local_check()
+
+    monkeypatch.setattr(thinking_routes, "_request_is_local", observe_route_entry)
+    login = client.post("/login", base_url=f"http://{login_host}",
+                        data={"username": "student-1", "password": "password"})
+    assert login.status_code == 302
+    with client.session_transaction(base_url=f"http://{login_host}") as stored:
+        assert stored["_user_id"] == "student-1"
+
+    response = client.post("/thinking/api/stage3/forum/trace",
+                           base_url=f"http://{request_host}",
+                           json={"session_id": session_id},
+                           environ_overrides={"REMOTE_ADDR": "127.0.0.1"})
+    same_host = login_host == request_host
+    assert observations == [{"cookie_present": same_host, "user_present": same_host}]
+    assert len(route_entries) == int(same_host)
+    assert response.status_code == (200 if same_host else 302)
+    if same_host:
+        assert response.json["success"] is True
+    else:
+        assert urlsplit(response.headers["Location"]).path == "/login"
+        # The original login is still persisted: this is not storage loss.
+        with client.session_transaction(base_url=f"http://{login_host}") as stored:
+            assert stored["_user_id"] == "student-1"
+        # Change only the login host, then repeat the identical trace request.
+        client.post("/login", base_url=f"http://{request_host}",
+                    data={"username": "student-1", "password": "password"})
+        recovered = client.post("/thinking/api/stage3/forum/trace",
+                                base_url=f"http://{request_host}",
+                                json={"session_id": session_id},
+                                environ_overrides={"REMOTE_ADDR": "127.0.0.1"})
+        assert recovered.status_code == 200
+        assert recovered.json["success"] is True
+        assert observations[-1] == {"cookie_present": True, "user_present": True}
+        assert len(route_entries) == 1
+
