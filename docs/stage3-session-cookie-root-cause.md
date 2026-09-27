@@ -6,7 +6,7 @@
 
 这是已修复问题的追溯分析，不是新发现的线上故障，也不重复申报阶段二的修复。本次新增的是双向域名对照实验、请求边界观测、原会话保存验证、重新登录恢复验证和受控错误复现脚本。
 
-基线：上游 main `4b0771de510985d7bf89097b832d01edd01bc5d7`，实验日期 2026-09-27。
+基线：PR 目标仓库 `Z11zhang/CodeSense` 的 `main`，提交 `52acab2bdf99461bbd5f25cfe08e98c118bc03e6`。版本为 v1.4.0；桌面 `codesense-main-latest2/CodeSense-main/README.md` 的 Git blob `981df623157fb72e7f91dbdef792aadea00c9edf` 与该 fork 的 `main` 完全一致。实验日期 2026-09-27。
 
 ## 观察
 
@@ -72,28 +72,28 @@ python experiments/session_cookie_scope/reproduce.py
 
 ## 验证环境与结果
 
-Windows，Python 3.14.7；Flask 2.3.3、Werkzeug 2.3.7、Flask-Session 0.8.0、Flask-Login 0.6.2、pytest 9.1.1。未找到可用的共享 `student-eval`，使用已有 `.venv-test` 解释器，仅运行当前源码。没有复制 `.env`，没有安装/升级依赖。
+Windows，Python 3.14.7；Flask 2.3.3、Werkzeug 2.3.7、Flask-Session 0.8.0、Flask-Login 0.6.2、pytest 9.1.1。测试运行在桌面 v1.4.0 项目源码的隔离工作副本中，代码基线与 PR 目标仓库一致。未找到可用的共享 `student-eval`，使用已有 `.venv-test` 解释器。没有复制 `.env`，没有安装/升级依赖。
 
 Trace fixture 使用临时 SQLite 与临时文件会话；Redis ping 被替换为明确失败，确保不会连接或写入正在运行的 Redis。测试只使用合成账号，不是生产/真实账号验收；未启动人工访问的 PR 服务。
 
 实际运行：
 
 ```text
-python -m pytest tests/test_stage3_forum_trace.py -q --basetemp=.stage3-test-tmp
-10 passed, 127 warnings in 23.11s
+python -m pytest tests/test_stage3_forum_trace.py -q --disable-warnings --basetemp=.stage3-v14-tmp
+10 passed, 127 warnings in 14.34s
 
 python experiments/session_cookie_scope/reproduce.py
-4 failed, 2 passed, 74 warnings in 8.21s
+4 failed, 2 passed, 74 warnings in 8.35s
 CONTROLLED_MUTATION_EXPECTED_FAILURES=True
 
 python -m pip check
 No broken requirements found.
 
-python -m pytest tests/test_compile_error_scoring.py tests/test_demo_guided_learning.py tests/test_stage3_forum_trace.py tests/test_readme_setup.py -q --disable-warnings
-25 passed, 3275 warnings in 64.65s (0:01:04)
+python -m pytest tests/test_demo_guided_learning.py tests/test_stage3_forum_trace.py tests/test_readme_setup.py -q --disable-warnings --basetemp=.stage3-v14-related-tmp
+19 passed, 2 failed, 3166 warnings in 54.52s
 ```
 
-上述结果是本次实际运行，不引用阶段二的通过数作为本次结果。弃用警告包括 Flask-Session 文件后端、SQLAlchemy 旧 API 和 datetime，用例没有因此失败。
+两项失败在 `test_demo_guided_learning.py`：`test_public_demo_shortcuts_can_move_shared_session_through_all_stages` 与 `test_public_shortcut_rejects_regular_student_other_assignment_and_anonymous`，错误为服务端 session 读取时缺少 `demo_run_id`（`KeyError`）。它们不是 Trace 根因矩阵用例；这组相关回归不能标记为全通过。弃用警告包括 Flask-Session 文件后端、SQLAlchemy 旧 API 和 datetime。
 
 ## 取舍与边界
 
