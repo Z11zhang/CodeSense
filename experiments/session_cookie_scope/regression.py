@@ -1,4 +1,4 @@
-""""Run the Stage 3 regression before/after check.
+"""Run the Stage 3 regression before/after check.
 
 From the repository root:
     python experiments/session_cookie_scope/regression.py
@@ -28,7 +28,7 @@ def main():
     root = Path(__file__).resolve().parents[2]
     test_file = root / "tests/test_stage3_forum_trace.py"
     source = test_file.read_text(encoding="utf-8")
-    source = source.split('\n\n@pytest.mark.parametrize(\n    "login_host,request_host",')[0]
+    source = source.split('\\n\\n@pytest.mark.parametrize(\\n    "login_host,request_host",')[0]
     old = 'client.post("/login", data={"username": "student-1", "password": "password"})'
     new = 'client.post("/login", data={"username": "student-1", "password": "password"}, base_url="http://example.com")'
     if source.count(old) != 1:
